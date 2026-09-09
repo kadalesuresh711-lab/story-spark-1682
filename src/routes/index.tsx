@@ -245,8 +245,11 @@ function Index() {
       // only writes the prompts for one range of line numbers (the answer, not
       // the input, is what has a size ceiling). Passes run one after another
       // because the text engine uses a single key at a time.
-      // Stage 2 drains a shared queue as soon as prompts land, so image
-      // rendering starts within seconds instead of after the last pass.
+      // Finish prompt writing before image rendering. Starting 24 image lanes
+      // after the first 60 prompts saturated the published app's request pool,
+      // starving the next prompt range even though the same flow worked in the
+      // local preview. The prompt range remains 60; only the two stages are
+      // ordered so image traffic can never block prompt 61 and beyond.
       const needPrompts = pending.filter((s) => !hasPrompt(s.prompt));
       const ranges: { from: number; to: number }[] = [];
       for (let i = 0; i < needPrompts.length; i += PROMPT_RANGE) {
@@ -490,10 +493,8 @@ function Index() {
         }
       };
 
-      await Promise.all([
-        promptStage,
-        ...Array.from({ length: IMAGE_CONCURRENCY }, () => worker()),
-      ]);
+      await promptStage;
+      await Promise.all(Array.from({ length: IMAGE_CONCURRENCY }, () => worker()));
 
       await saveProgress(key, { bible: b, shots: list });
       setPhase("done");
