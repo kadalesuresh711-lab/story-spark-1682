@@ -98,15 +98,13 @@ export function agnesChat(user: string, opts: ChatOptions = {}): Promise<string>
 
 
 async function callAgnes(user: string, opts: ChatOptions): Promise<string> {
-  const attempts = opts.attempts ?? 6;
-  let lastErr = "";
+  await acquire();
+  try {
+    const attempts = opts.attempts ?? 6;
+    let lastErr = "";
 
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    const gap = MIN_GAP_MS - (Date.now() - lastUsed);
-    if (gap > 0) await sleep(gap);
-    lastUsed = Date.now();
-
-    try {
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      try {
       const res = await fetch(API, {
         method: "POST",
         signal: AbortSignal.timeout(opts.timeoutMs ?? 600_000),
@@ -134,33 +132,36 @@ async function callAgnes(user: string, opts: ChatOptions): Promise<string> {
         }),
       });
 
-      if (res.ok) {
-        const { text, err } = await readStream(res);
-        if (text) return text;
-        lastErr = err
-          ? `${err.code ?? "error"} ${err.message ?? ""}`.trim()
-          : "empty completion";
-        await sleep(1_500 * (attempt + 1));
-        continue;
-      }
+        if (res.ok) {
+          const { text, err } = await readStream(res);
+          if (text) return text;
+          lastErr = err
+            ? `${err.code ?? "error"} ${err.message ?? ""}`.trim()
+            : "empty completion";
+          await sleep(1_500 * (attempt + 1));
+          continue;
+        }
 
-      const body = (await res.text().catch(() => "")).slice(0, 600);
-      lastErr = `${res.status} ${body}`;
+        const body = (await res.text().catch(() => "")).slice(0, 600);
+        lastErr = `${res.status} ${body}`;
 
-      if (busy(res.status, body)) {
-        const retryAfter = Number(res.headers.get("retry-after") ?? 0);
-        await sleep(retryAfter > 0 ? retryAfter * 1000 + 500 : 3_000 * (attempt + 1));
-        continue;
+        if (busy(res.status, body)) {
+          const retryAfter = Number(res.headers.get("retry-after") ?? 0);
+          await sleep(retryAfter > 0 ? retryAfter * 1000 + 500 : 3_000 * (attempt + 1));
+          continue;
+        }
+        if (res.status === 400 || res.status === 401 || res.status === 403) break;
+        await sleep(1_200 * (attempt + 1));
+      } catch (e) {
+        lastErr = e instanceof Error ? e.message : String(e);
+        await sleep(1_000 * (attempt + 1));
       }
-      if (res.status === 400 || res.status === 401 || res.status === 403) break;
-      await sleep(1_200 * (attempt + 1));
-    } catch (e) {
-      lastErr = e instanceof Error ? e.message : String(e);
-      await sleep(1_000 * (attempt + 1));
     }
-  }
 
-  throw new Error(`Agnes request failed: ${lastErr}`);
+    throw new Error(`Agnes request failed: ${lastErr}`);
+  } finally {
+    release();
+  }
 }
 
 export function engineStatus(): { model: string; keyIndex: number; keys: number } {

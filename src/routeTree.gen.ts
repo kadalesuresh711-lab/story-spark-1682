@@ -10,11 +10,17 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiPromptsRouteImport } from './routes/api/prompts'
 import { Route as ApiProxyImageRouteImport } from './routes/api/proxy-image'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiPromptsRoute = ApiPromptsRouteImport.update({
+  id: '/api/prompts',
+  path: '/api/prompts',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiProxyImageRoute = ApiProxyImageRouteImport.update({
@@ -25,27 +31,31 @@ const ApiProxyImageRoute = ApiProxyImageRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/api/prompts': typeof ApiPromptsRoute
   '/api/proxy-image': typeof ApiProxyImageRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/api/prompts': typeof ApiPromptsRoute
   '/api/proxy-image': typeof ApiProxyImageRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/api/prompts': typeof ApiPromptsRoute
   '/api/proxy-image': typeof ApiProxyImageRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/api/proxy-image'
+  fullPaths: '/' | '/api/prompts' | '/api/proxy-image'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/proxy-image'
-  id: '__root__' | '/' | '/api/proxy-image'
+  to: '/' | '/api/prompts' | '/api/proxy-image'
+  id: '__root__' | '/' | '/api/prompts' | '/api/proxy-image'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  ApiPromptsRoute: typeof ApiPromptsRoute
   ApiProxyImageRoute: typeof ApiProxyImageRoute
 }
 
@@ -56,6 +66,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/prompts': {
+      id: '/api/prompts'
+      path: '/api/prompts'
+      fullPath: '/api/prompts'
+      preLoaderRoute: typeof ApiPromptsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/proxy-image': {
@@ -70,6 +87,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  ApiPromptsRoute: ApiPromptsRoute,
   ApiProxyImageRoute: ApiProxyImageRoute,
 }
 export const routeTree = rootRouteImport

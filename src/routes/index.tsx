@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { analyzeScript, promptsForRange, renderImage, renderBatch } from "@/lib/manga.functions";
+import { analyzeScript, renderImage, renderBatch } from "@/lib/manga.functions";
 
 import { buildTimeline, fmt, scriptEndTime, type Segment } from "@/lib/script";
 import { buildVideo, webCodecsSupported } from "@/lib/video";
@@ -117,11 +117,65 @@ function missingPromptLines(shots: Shot[]): number[] {
   return shots.filter((s) => !hasPrompt(s.prompt)).map((s) => s.index + 1);
 }
 
+type PromptRequest = {
+  bible: string;
+  from: number;
+  to: number;
+  segments: Segment[];
+};
+
+/**
+ * Reads the prompt endpoint's event stream. Heartbeats keep long published
+ * requests alive; only the final result event is exposed to the pipeline.
+ */
+async function getPrompts(input: PromptRequest): Promise<{ prompts: string[] }> {
+  const response = await fetch("/api/prompts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    throw new Error((await response.text().catch(() => "")) || `Prompt request failed (${response.status})`);
+  }
+  if (!response.body) throw new Error("Prompt stream was unavailable");
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let result: string[] | undefined;
+  let failure: string | undefined;
+
+  const consume = (frame: string) => {
+    let event = "message";
+    const data: string[] = [];
+    for (const line of frame.split("\n")) {
+      if (line.startsWith("event:")) event = line.slice(6).trim();
+      if (line.startsWith("data:")) data.push(line.slice(5).trim());
+    }
+    if (data.length === 0) return;
+    const payload = JSON.parse(data.join("\n")) as { prompts?: string[]; error?: string };
+    if (event === "result" && Array.isArray(payload.prompts)) result = payload.prompts;
+    if (event === "failure") failure = payload.error || "Prompt generation failed";
+  };
+
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+    const frames = buffer.split("\n\n");
+    buffer = frames.pop() ?? "";
+    frames.forEach(consume);
+  }
+  if (buffer.trim()) consume(buffer);
+  if (failure) throw new Error(failure);
+  if (!result) throw new Error("Prompt stream ended before returning prompts");
+  return { prompts: result };
+}
+
 
 
 function Index() {
   const analyze = useServerFn(analyzeScript);
-  const getPrompts = useServerFn(promptsForRange);
 
   const draw = useServerFn(renderImage);
   const drawBatch = useServerFn(renderBatch);
@@ -245,8 +299,9 @@ function Index() {
       // only writes the prompts for one range of line numbers (the answer, not
       // the input, is what has a size ceiling). Passes run one after another
       // because the text engine uses a single key at a time.
-      // Stage 2 drains a shared queue as soon as prompts land, so image
-      // rendering starts within seconds instead of after the last pass.
+      // Stage 2 drains a shared queue as soon as prompts land. Prompt requests
+      // use a heartbeat stream, so the published connection stays active while
+      // Agnes writes each full 60-line answer.
       const needPrompts = pending.filter((s) => !hasPrompt(s.prompt));
       const ranges: { from: number; to: number }[] = [];
       for (let i = 0; i < needPrompts.length; i += PROMPT_RANGE) {
@@ -315,12 +370,10 @@ function Index() {
           targets.forEach((s) => record(s.index, { status: "prompting" }));
           try {
             const res = await getPrompts({
-              data: {
-                bible: b,
-                from: range.from,
-                to: range.to,
-                segments: allSegments,
-              },
+              bible: b,
+              from: range.from,
+              to: range.to,
+              segments: allSegments,
             });
             const prompts = res.prompts as string[];
             targets.forEach((s) => {
@@ -358,9 +411,7 @@ function Index() {
             const num = s.index + 1;
             record(s.index, { status: "prompting", error: undefined });
             try {
-              const res = await getPrompts({
-                data: { bible: b, from: num, to: num, segments: allSegments },
-              });
+              const res = await getPrompts({ bible: b, from: num, to: num, segments: allSegments });
               const slot = (res.prompts as string[])[0];
               if (hasPrompt(slot)) {
                 const prompt = (slot as string).trim();
@@ -534,17 +585,15 @@ function Index() {
         record(shot.index, { status: "prompting", error: undefined });
         try {
           const { prompts } = await getPrompts({
-            data: {
-              bible,
-              from: shot.index + 1,
-              to: shot.index + 1,
-              segments: shotsRef.current.map((s) => ({
-                index: s.index,
-                start: s.start,
-                end: s.end,
-                text: s.text,
-              })),
-            },
+            bible,
+            from: shot.index + 1,
+            to: shot.index + 1,
+            segments: shotsRef.current.map((s) => ({
+              index: s.index,
+              start: s.start,
+              end: s.end,
+              text: s.text,
+            })),
           });
           const slot = prompts[0] as string | undefined;
           prompt = hasPrompt(slot) ? (slot as string).trim() : undefined;
