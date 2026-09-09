@@ -18,7 +18,8 @@ export function model(): string {
 }
 
 function apiKey(): string {
-  const key = process.env["AGNES_API_KEY"]?.trim();
+  const key =
+    process.env["AGNES_API_KEY"]?.trim() || process.env["OPENAI_API_KEY"]?.trim();
   if (!key) throw new Error("Missing AGNES_API_KEY (Agnes AI key)");
   return key;
 }
